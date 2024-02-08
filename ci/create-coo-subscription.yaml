@@ -8,7 +8,7 @@
     PATH: "{{ cifmw_path }}"
   tasks:
     - name: Create the COO subscription
-      ansible.builtin.command:
+      ansible.builtin.shell:
         cmd: |
           oc create -f - <<EOF
           apiVersion: operators.coreos.com/v1alpha1
