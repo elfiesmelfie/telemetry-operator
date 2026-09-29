@@ -377,7 +377,7 @@ kuttl-test-prep:
 .PHONY: kuttl-test-run
 kuttl-test-run: export NAMESPACE = $(KUTTL_NAMESPACE)
 kuttl-test-run:
-	oc kuttl test --v 1 --start-kind=false --config $(KUTTL_SUITE_DIR)/config.yaml
+	oc kuttl test --v 1 --start-kind=false --config $(KUTTL_SUITE_DIR)/kuttl-test.yaml
 
 .PHONY: kuttl-test
 kuttl-test: kuttl-test-prep kuttl-test-run
