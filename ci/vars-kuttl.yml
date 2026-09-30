@@ -1,0 +1,13 @@
+---
+# Consumed by cifmw-multinode-kuttl-operator-target (ci-framework,
+# zuul.d/kuttl_multinode.yaml). Its deploy-deps.yaml asserts operator_name and
+# uses it to locate the operator checkout to run the Make targets from.
+operator_name: telemetry-operator
+
+# Not strictly required: the default, tls, topology, cloudkitty and
+# metricstorage suites each apply deps/rhobs.yaml from their own 00-deps step
+# and poll for the CRDs. Installing the cluster-observability-operator up front
+# means those five are not all racing an OLM install mid-test, which removes a
+# flake source. The Loki operator needs no equivalent - the suites that use it
+# install it the same way, and the logging suite does not use it at all.
+cifmw_deploy_obs: true

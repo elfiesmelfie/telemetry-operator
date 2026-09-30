@@ -8,7 +8,7 @@ timeout: 600
 parallel: 1
 skipDelete: true
 testDirs:
-  - test/kuttl/tests/cloudkitty/
+  - test/kuttl/tests/
 suppress:
   - events
 artifactsDir: test/kuttl/tests/cloudkitty/output

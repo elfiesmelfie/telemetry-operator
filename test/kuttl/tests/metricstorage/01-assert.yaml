@@ -204,7 +204,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: telemetry-kuttl-tests-telemetry-kuttl-datasource
+  name: telemetry-kuttl-metricstorage-telemetry-kuttl-datasource
   namespace: openshift-config-managed
 ---
 apiVersion: v1

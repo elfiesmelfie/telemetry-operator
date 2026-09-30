@@ -365,46 +365,151 @@ kuttl-install:
 	export PATH="$${KREW_ROOT:-$$HOME/.krew}/bin:$$PATH" && kubectl krew install kuttl
 	echo "Place 'export PATH=$${KREW_ROOT:-$$HOME/.krew}/bin:$$PATH' to your ~/.bashrc"
 
+# Every directory under test/kuttl/tests/ holding a kuttl-test.yaml is a suite.
+KUTTL_ALL_SUITES := $(sort $(patsubst test/kuttl/tests/%/kuttl-test.yaml,%,$(wildcard test/kuttl/tests/*/kuttl-test.yaml)))
+# The suite(s) to act on: a suite name, a space separated list, or 'all'.
+#   make kuttl-test                              # the 'default' suite
+#   make kuttl-test KUTTL_SUITE=autoscaling      # a single suite
+#   make kuttl-test KUTTL_SUITE="default tls"    # a list of suites
+#   make kuttl-test KUTTL_SUITE=all              # every suite (or: make kuttl-test-all)
 KUTTL_SUITE ?= default
+# 'all' is only meaningful to kuttl-test, which expands it here and then
+# recurses into the single-suite targets once per suite.
+KUTTL_SUITES = $(if $(filter all,$(KUTTL_SUITE)),$(KUTTL_ALL_SUITES),$(KUTTL_SUITE))
+# Suites share the cluster, so each one is torn down before the next starts.
+# Set to false to keep the deployment around for debugging.
+KUTTL_CLEANUP ?= true
 KUTTL_NAMESPACE ?= telemetry-kuttl-$(KUTTL_SUITE)
 KUTTL_SUITE_DIR ?= test/kuttl/tests/$(KUTTL_SUITE)
 
+# The metricstorage suite applies a NetConfig as part of its EDPM power
+# monitoring step. The manifest belongs to infra-operator, so it has to be
+# staged into the suite's deps/ before the suite runs - fetching it from inside
+# a test step would make the suite fail whenever GitHub is unreachable.
+KUTTL_NETCONFIG = test/kuttl/tests/metricstorage/deps/netconfig.yaml
+# Path of the manifest within the infra-operator repository.
+INFRA_OPERATOR_NETCONFIG ?= config/samples/network_v1beta1_netconfig.yaml
+# Set INFRA_OPERATOR_SRC to an infra-operator checkout to stage from disk
+# instead of downloading. The Zuul job sets it, so CI never reaches the network
+# here; local runs fall back to the URL below.
+INFRA_OPERATOR_BRANCH ?= main
+INFRA_OPERATOR_NETCONFIG_URL ?= https://raw.githubusercontent.com/openstack-k8s-operators/infra-operator/$(INFRA_OPERATOR_BRANCH)/$(INFRA_OPERATOR_NETCONFIG)
+
+.PHONY: kuttl-list-suites
+kuttl-list-suites: ## List the available kuttl test suites.
+	@for suite in $(KUTTL_ALL_SUITES); do echo $$suite; done
+
+# Stages the infra-operator NetConfig the metricstorage suite applies. Copies
+# it from INFRA_OPERATOR_SRC when that is set (Zuul, where infra-operator is a
+# required-project), otherwise downloads it once. A missing file under a set
+# INFRA_OPERATOR_SRC is an error rather than a silent fall back to the network,
+# so a broken checkout in CI is reported instead of masked.
+.PHONY: kuttl-netconfig
+kuttl-netconfig: ## Stage the infra-operator NetConfig used by the metricstorage suite.
+	@if [ -n "$(INFRA_OPERATOR_SRC)" ]; then \
+		if [ ! -f "$(INFRA_OPERATOR_SRC)/$(INFRA_OPERATOR_NETCONFIG)" ]; then \
+			echo "INFRA_OPERATOR_SRC=$(INFRA_OPERATOR_SRC) has no $(INFRA_OPERATOR_NETCONFIG)"; \
+			exit 1; \
+		fi; \
+		echo "Staging $(KUTTL_NETCONFIG) from $(INFRA_OPERATOR_SRC)"; \
+		cp "$(INFRA_OPERATOR_SRC)/$(INFRA_OPERATOR_NETCONFIG)" $(KUTTL_NETCONFIG); \
+	elif [ -f $(KUTTL_NETCONFIG) ]; then \
+		echo "Reusing $(KUTTL_NETCONFIG)"; \
+	else \
+		echo "Downloading $(KUTTL_NETCONFIG) from $(INFRA_OPERATOR_NETCONFIG_URL)"; \
+		curl -sSfL -o $(KUTTL_NETCONFIG) $(INFRA_OPERATOR_NETCONFIG_URL); \
+	fi
+
+# The single-suite targets below derive a namespace and a directory from
+# KUTTL_SUITE, so they need exactly one real suite name.
+.PHONY: kuttl-check-suite
+kuttl-check-suite:
+	@if [ "$(words $(KUTTL_SUITE))" != "1" ] || [ -z "$(filter $(KUTTL_SUITE),$(KUTTL_ALL_SUITES))" ]; then \
+		echo "KUTTL_SUITE must name a single suite here, got: $(KUTTL_SUITE)"; \
+		echo "Available suites: $(KUTTL_ALL_SUITES)"; \
+		echo "Use 'make kuttl-test' to run several suites or all of them."; \
+		exit 1; \
+	fi
+
+# kuttl-test-prep and kuttl-test-run are the two entry points ci-framework's
+# cifmw-multinode-kuttl-operator-target calls, one in its pre-run phase and one
+# in its run phase, with the same environment. Whenever KUTTL_SUITE resolves to
+# more than one suite - 'all', or a space-separated list - that pair covers all
+# of them: there is nothing to prepare up front, because kuttl-test deploys and
+# tears down one suite at a time.
 .PHONY: kuttl-test-prep
 kuttl-test-prep:
+ifneq ($(words $(KUTTL_SUITES)),1)
+	@echo "KUTTL_SUITE=$(KUTTL_SUITE): kuttl-test-run deploys each suite as it reaches it."
+else
+	@$(MAKE) kuttl-check-suite
+	@if [ "$(KUTTL_SUITE)" = "metricstorage" ]; then $(MAKE) kuttl-netconfig; fi
 	oc apply -k $(KUTTL_SUITE_DIR)/deps/ --timeout=120s
 	oc wait -n $(KUTTL_NAMESPACE) openstackcontrolplane openstack --for condition=Ready --timeout=300s
+endif
 
 .PHONY: kuttl-test-run
 kuttl-test-run: export NAMESPACE = $(KUTTL_NAMESPACE)
 kuttl-test-run:
-	oc kuttl test --v 1 --start-kind=false --config $(KUTTL_SUITE_DIR)/kuttl-test.yaml
+ifneq ($(words $(KUTTL_SUITES)),1)
+	$(MAKE) kuttl-test
+else
+	@$(MAKE) kuttl-check-suite
+	# kuttl treats every directory under testDirs as a test case, so testDirs
+	# points at test/kuttl/tests/ and --test picks the one suite to run. With
+	# testDirs pointing at the suite itself, kuttl would run the suite's deps/
+	# and output/ subdirectories as (empty, always passing) test cases and
+	# silently ignore the numbered step files.
+	oc kuttl test --v 1 --start-kind=false --test $(KUTTL_SUITE) --config $(KUTTL_SUITE_DIR)/kuttl-test.yaml
+endif
 
+.PHONY: kuttl-test-suite
+kuttl-test-suite: kuttl-test-prep kuttl-test-run
+
+# Runs the selected suites serially. A failing suite does not stop the run, but
+# the target still exits non-zero at the end.
 .PHONY: kuttl-test
-kuttl-test: kuttl-test-prep kuttl-test-run
+kuttl-test:
+	$(eval unknown_suites=$(filter-out $(KUTTL_ALL_SUITES),$(KUTTL_SUITES)))
+	@if [ -n "$(unknown_suites)" ]; then \
+		echo "Unknown kuttl suite(s): $(unknown_suites)"; \
+		echo "Available suites: $(KUTTL_ALL_SUITES)"; \
+		exit 1; \
+	fi
+	rc=0; \
+	failed=""; \
+	for suite in $(KUTTL_SUITES); do \
+		echo "### kuttl suite: $$suite"; \
+		$(MAKE) kuttl-test-suite KUTTL_SUITE=$$suite || { rc=1; failed="$$failed $$suite"; }; \
+		if [ "$(KUTTL_CLEANUP)" == "true" ]; then \
+			$(MAKE) kuttl-cleanup-suite KUTTL_SUITE=$$suite; \
+		fi; \
+	done; \
+	if [ "$$rc" != "0" ]; then echo "### failed suites:$$failed"; fi; \
+	exit $$rc
 
+.PHONY: kuttl-test-all
+kuttl-test-all: ## Run every kuttl test suite.
+	$(MAKE) kuttl-test KUTTL_SUITE=all
+
+# Cleans up the selected suites, 'all' of them by default.
 .PHONY: kuttl-test-cleanup
 kuttl-test-cleanup:
+	for suite in $(KUTTL_SUITES); do \
+		$(MAKE) kuttl-cleanup-suite KUTTL_SUITE=$$suite; \
+	done
+
+.PHONY: kuttl-cleanup-suite
+kuttl-cleanup-suite: kuttl-check-suite
 	# only cleanup if the $(KUTTL_NAMESPACE) exists
 	$(eval namespace_exists=$(shell oc get namespace $(KUTTL_NAMESPACE) --ignore-not-found -o name))
 	# We need to order the deletion. Simply deleting the namespace will
 	# result in errors in mariadb- and keystone-operator and then
 	# finalizer removal get stuck blocking the namespace deletion.
 	if [ "${namespace_exists}" != "" ]; then \
-		if [ "$(KUTTL_SUITE)" == "autoscaling" ]; then \
-			oc delete --wait=true --all=true -n $(KUTTL_NAMESPACE) --timeout=120s Autoscaling; \
-		fi; \
-		if [ "$(KUTTL_SUITE)" == "ceilometer" ]; then \
-			oc delete --wait=true --all=true -n $(KUTTL_NAMESPACE) --timeout=120s Ceilometer; \
-		fi; \
-		if [ "$(KUTTL_SUITE)" == "metric-storage" ]; then \
-			oc delete --wait=true --all=true -n $(KUTTL_NAMESPACE) --timeout=120s MetricStorage; \
-		fi; \
-		if [ "$(KUTTL_SUITE)" == "cloudkitty" ]; then \
-			oc delete --wait=true --all=true -n $(KUTTL_NAMESPACE) --timeout=120s CloudKitty; \
-		fi; \
-		if [ "$(KUTTL_SUITE)" == "default" ]; then \
-			oc delete --wait=true --all=true -n $(KUTTL_NAMESPACE) --timeout=120s Telemetry; \
-		fi; \
+		for kind in Telemetry Autoscaling Ceilometer MetricStorage CloudKitty Logging; do \
+			oc delete --wait=true --all=true --ignore-not-found -n $(KUTTL_NAMESPACE) --timeout=120s $$kind; \
+		done; \
 		oc delete --wait=true --all=true -n $(KUTTL_NAMESPACE) --timeout=120s OpenStackControlPlane; \
 		oc delete --wait=true namespace $(KUTTL_NAMESPACE); \
 	else \

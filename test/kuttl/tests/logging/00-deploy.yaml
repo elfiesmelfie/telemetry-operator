@@ -4,4 +4,4 @@ metadata:
   name: telemetry-kuttl-logging
 spec:
     port: 10514
-    cloNamespace: telemetry-kuttl-tests
+    cloNamespace: telemetry-kuttl-logging

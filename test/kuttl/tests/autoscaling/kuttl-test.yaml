@@ -8,7 +8,7 @@ timeout: 300
 parallel: 1
 skipDelete: true
 testDirs:
-  - test/kuttl/tests/autoscaling/
+  - test/kuttl/tests/
 suppress:
   - events
 artifactsDir: test/kuttl/tests/autoscaling/output

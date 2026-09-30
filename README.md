@@ -325,34 +325,58 @@ The following procedure is to be performed after the
 
 ### Quick start
 
+Each directory under `test/kuttl/tests/` containing a `kuttl-test.yaml` is a
+test suite. It deploys its own dependencies (including an
+`OpenStackControlPlane`) into its own `telemetry-kuttl-<suite>` namespace.
+
 To run all the test suites, simply run:
 
 ```bash
-cd install_yamls
-make telemetry_kuttl
+make kuttl-test-all          # same as: make kuttl-test KUTTL_SUITE=all
 ```
+
+The suites are run serially and each one is torn down before the next starts,
+since they cannot share the cluster. A failing suite does not stop the run; the
+list of failures is printed at the end and the target exits non-zero.
 
 > **NOTE**: It is not necessary to have a full RHOSO deployment available, only 1. make_crc and 2 make crc_storage is required
 
-### Running individual test suites
+### Selecting the suites to run
 
-To run a single test suite (e.g., autoscaling):
+`KUTTL_SUITE` takes a suite name, a list of them, or the special value `all`:
 
 ```bash
-cd install_yamls
-make kuttl_common_prep ovn heat heat_deploy certmanager telemetry telemetry_deploy_prep # This sets up the tests dependencies. Only run it if make telemetry_kuttl wasn't run before
-cd telemetry-operator/
-oc kuttl test --test tls # Replace tls with the name of the test suite that wants to be run
+make kuttl-test                             # the 'default' suite
+make kuttl-test KUTTL_SUITE=autoscaling     # a single suite
+make kuttl-test KUTTL_SUITE="default tls"   # a list of suites
+make kuttl-test KUTTL_SUITE=all             # every suite
+make kuttl-list-suites                      # show the available suites
 ```
+
+An unknown suite name fails immediately with the list of valid ones.
+
+To run a single suite without the automatic teardown:
+
+```bash
+make kuttl-test-suite KUTTL_SUITE=tls
+make kuttl-test-cleanup KUTTL_SUITE=tls   # when you are done
+```
+
+`kuttl-test-cleanup` follows the same `KUTTL_SUITE` convention, so
+`make kuttl-test-cleanup KUTTL_SUITE=all` tears down every suite's namespace.
+
+`kuttl-test-suite` is split into `kuttl-test-prep` (applies
+`test/kuttl/tests/<suite>/deps/` and waits for the control plane) and
+`kuttl-test-run` (runs kuttl itself), which can also be invoked separately.
 
 > **NOTE**: Make sure to have Kuttl dependencies are available.
 
 ### Debug mode
 
-To keep the namespace after test completion for debugging:
+To keep the deployments around after the tests complete:
 
 ```bash
-oc kuttl test --test tls --skip-delete
+make kuttl-test KUTTL_CLEANUP=false
 ```
 
 ### Known Issues

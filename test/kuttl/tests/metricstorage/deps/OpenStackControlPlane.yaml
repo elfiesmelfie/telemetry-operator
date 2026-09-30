@@ -14,8 +14,10 @@ spec:
       ironicConductors: []
   ovn:
     enabled: false
+  # Keystone is enabled below, and the OpenStackControlPlane webhook rejects
+  # Keystone unless Galera, Memcached and RabbitMQ are all enabled too.
   rabbitmq:
-    enabled: false
+    enabled: true
     templates:
       rabbitmq:
         replicas: 1

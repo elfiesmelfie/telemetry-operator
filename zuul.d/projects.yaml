@@ -251,6 +251,63 @@
            json_query('[].{name: key, full_registry: value}') }}
     irrelevant-files: *irrelevant_files
 
+- job:
+    name: telemetry-operator-kuttl
+    parent: cifmw-multinode-kuttl-operator-target
+    # The parent defaults to openstack-meta-content-provider. Only the operator
+    # images matter here, so the plain content provider is enough.
+    dependencies:
+      - openstack-k8s-operators-content-provider
+    roles:
+      - zuul: github.com/openstack-k8s-operators/ci-framework
+    required-projects:
+      # The metricstorage suite applies infra-operator's NetConfig sample.
+      # Checking the repo out lets kuttl-test-prep stage it from disk rather
+      # than downloading it from GitHub while the suite is running.
+      - name: openstack-k8s-operators/infra-operator
+        override-checkout: main
+    # The parent allows 7200s. Every suite deploys and tears down its own
+    # OpenStackControlPlane, and they run serially on the one node.
+    timeout: 10800
+    post-run:
+      - ci/collect-kuttl-artifacts.yml
+    description: |
+      Run every telemetry-operator kuttl suite serially on a single CRC node
+      via the operator's own `make kuttl-test-prep` / `make kuttl-test-run`
+      targets. Replaces the prow telemetry-operator-build-deploy-kuttl job,
+      which only ever ran the legacy flat kuttl-test.yaml.
+    vars:
+      fetch_dlrn_hash: false
+      zuul_log_collection: true
+      # Merged into the environment of both Make targets by ci-framework's
+      # kuttl playbooks. 'all' turns the prep phase into a no-op and makes
+      # kuttl-test-run deploy, test and tear down each suite in turn.
+      cifmw_zuul_target_host_env:
+        KUTTL_SUITE: all
+        # Makes kuttl-netconfig copy the NetConfig sample out of the
+        # infra-operator checkout instead of fetching it over the network.
+        INFRA_OPERATOR_SRC: "{{ ansible_user_dir }}/{{ zuul.projects['github.com/openstack-k8s-operators/infra-operator'].src_dir }}"
+      cifmw_extras:
+        - "@{{ ansible_user_dir }}/{{ zuul.projects['github.com/openstack-k8s-operators/telemetry-operator'].src_dir }}/ci/vars-kuttl.yml"
+    extra-vars:
+      # Override the meta content provider's dlrn md5 hash: it comes from
+      # master, but this job runs antelope content.
+      content_provider_dlrn_md5_hash: ''
+    # Deliberately not the shared *irrelevant_files anchor: that excludes
+    # test/.* and kuttl-test.yaml, which are exactly what this job tests.
+    irrelevant-files:
+      - ^docs/
+      - ^README.*
+      - ^OWNERS.*
+      - ^LICENSE$
+      - ^renovate.json$
+      - .*\.md$
+      - .github/.*
+      - .pre-commit-config.yaml
+      - .golangci.yaml
+      - .dockerignore
+      - .gitignore
+
 - project-template:
     name: rdo-telemetry-tempest-plugin-jobs
     openstack-experimental:
@@ -350,6 +407,25 @@
             vars:
               cifmw_install_yamls_sdk_version: v1.41.1
         - telemetry-operator-multinode-default-telemetry
+        # Runs all the kuttl suites. Non-voting until the serial run has
+        # proven stable enough to gate on.
+        - telemetry-operator-kuttl:
+            voting: false
+        ### s2i
+        - s2i-openstack-container-content-provider:
+            voting: false
+            vars:
+              s2i_ci_images:
+                - aodh/aodh-api
+                - ceilometer/ceilometer-central
+                - ceilometer/ceilometer-compute
+                - cloudkitty/cloudkitty-api
+        - s2i-deployment-test-telemetry:
+            voting: false
+            dependencies:
+              - openstack-k8s-operators-content-provider
+              - s2i-openstack-container-content-provider
+        ### end s2i
         # it is required as feature-verification-tests have hard dependencies,
         # where it require to have that job to be executed.
         - telemetry-openstack-meta-content-provider-master

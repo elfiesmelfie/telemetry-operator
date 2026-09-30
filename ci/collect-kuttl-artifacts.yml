@@ -1,0 +1,34 @@
+---
+# The ci-framework kuttl job only saves the stdout of `make kuttl-test-run`.
+# Each suite additionally writes a JSON report into its own output/ directory
+# (artifactsDir in test/kuttl/tests/<suite>/kuttl-test.yaml). Gather those into
+# the zuul log dir so a failed run can be triaged from the build page.
+- name: "Collect kuttl suite reports"
+  hosts: controller
+  gather_facts: false
+  vars:
+    telemetry_src: "{{ ansible_user_dir }}/{{ zuul.projects['github.com/openstack-k8s-operators/telemetry-operator'].src_dir }}"
+    kuttl_log_dir: "{{ ansible_user_dir }}/zuul-output/logs/controller/kuttl"
+  tasks:
+    - name: Create the kuttl log dir
+      ansible.builtin.file:
+        path: "{{ kuttl_log_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Find the kuttl suite reports
+      ansible.builtin.find:
+        paths: "{{ telemetry_src }}/test/kuttl/tests"
+        patterns: "*.json"
+        recurse: true
+      register: _kuttl_reports
+
+    - name: Copy the kuttl suite reports
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ kuttl_log_dir }}/{{ item.path | basename }}"
+        remote_src: true
+        mode: "0644"
+      loop: "{{ _kuttl_reports.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
